@@ -23,7 +23,6 @@ import pytest
 from dhm.cache.sqlite import CacheLayer
 from dhm.core.exceptions import CacheError
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
