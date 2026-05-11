@@ -6,6 +6,7 @@ and formatting to produce complete dependency health reports.
 """
 
 import asyncio
+import logging
 from pathlib import Path
 
 import aiohttp
@@ -15,9 +16,10 @@ from dhm.collectors.github import GitHubClient
 from dhm.collectors.pypi import PyPIClient
 from dhm.collectors.vulnerability import VulnerabilityScanner
 from dhm.core.calculator import HealthCalculator
+from dhm.core.exceptions import NetworkError, PackageNotFoundError, RateLimitError
 from dhm.core.models import (
+    ConfidenceLevel,
     DependencyReport,
-    HealthScore,
     PackageIdentifier,
 )
 from dhm.core.resolver import DependencyResolver
@@ -27,6 +29,8 @@ from dhm.reports.formatters import (
     MarkdownFormatter,
     TableFormatter,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ReportGenerator:
@@ -42,6 +46,7 @@ class ReportGenerator:
         github_token: str | None = None,
         cache_ttl: int = 3600,
         use_cache: bool = True,
+        max_concurrency: int = 10,
     ):
         """Initialize the report generator.
 
@@ -49,10 +54,12 @@ class ReportGenerator:
             github_token: Optional GitHub API token for higher rate limits.
             cache_ttl: Cache time-to-live in seconds.
             use_cache: Whether to use caching.
+            max_concurrency: Maximum number of packages analyzed concurrently.
         """
         self.github_token = github_token
         self.cache_ttl = cache_ttl
         self.use_cache = use_cache
+        self.max_concurrency = max_concurrency
 
         self.resolver = DependencyResolver()
         self.calculator = HealthCalculator()
@@ -115,32 +122,41 @@ class ReportGenerator:
         Returns:
             List of DependencyReport objects.
         """
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as session:
             pypi_client = PyPIClient(session, cache=self.cache)
             github_client = GitHubClient(session, token=self.github_token, cache=self.cache)
             vuln_scanner = VulnerabilityScanner(session, cache=self.cache)
 
-            # Fetch data for all packages concurrently
-            tasks = [
-                self._generate_single_report(
-                    pkg,
-                    pypi_client,
-                    github_client,
-                    vuln_scanner,
-                )
-                for pkg in packages
-            ]
+            # Bound concurrency to avoid overwhelming upstream APIs
+            sem = asyncio.Semaphore(self.max_concurrency)
+
+            async def run_with_sem(pkg: PackageIdentifier):
+                async with sem:
+                    return await self._generate_single_report(
+                        pkg,
+                        pypi_client,
+                        github_client,
+                        vuln_scanner,
+                    )
+
+            tasks = [run_with_sem(pkg) for pkg in packages]
 
             reports = await asyncio.gather(*tasks, return_exceptions=True)
 
             # Filter out exceptions and return valid reports
             valid_reports = []
-            for report in reports:
+            for pkg, report in zip(packages, reports):
                 if isinstance(report, DependencyReport):
                     valid_reports.append(report)
                 elif isinstance(report, Exception):
-                    # Log or handle the exception
-                    pass
+                    logger.warning(
+                        "Package %r failed during report generation: %s: %s",
+                        pkg.name,
+                        type(report).__name__,
+                        report,
+                    )
 
             return valid_reports
 
@@ -171,7 +187,10 @@ class ReportGenerator:
                 # For simplicity, we skip this in MVP and always fetch fresh data
                 pass
 
-        # Fetch PyPI metadata
+        # Track which data sources failed so we can lower confidence accordingly
+        failed_sources: list[str] = []
+
+        # Fetch PyPI metadata — PackageNotFoundError propagates immediately (H-14)
         pypi_metadata = None
         try:
             pypi_metadata = await pypi_client.get_package_info(
@@ -180,9 +199,18 @@ class ReportGenerator:
             )
             # Also fetch download stats from pypistats.org
             if pypi_metadata:
-                downloads = await pypi_client.get_download_stats(package.name)
-                # Update the metadata object with real download count
-                pypi_metadata.downloads_last_month = downloads
+                try:
+                    downloads = await pypi_client.get_download_stats(package.name)
+                    # Update the metadata object with real download count
+                    pypi_metadata.downloads_last_month = downloads
+                except (NetworkError, RateLimitError) as exc:
+                    logger.warning(
+                        "Package %r: download stats unavailable: %s: %s",
+                        package.name,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    failed_sources.append(f"Download stats unavailable: {exc}")
 
                 # IMPORTANT: Update package version from PyPI if not specified
                 # This enables accurate open vs fixed vulnerability detection
@@ -192,8 +220,17 @@ class ReportGenerator:
                         version=pypi_metadata.version,
                         extras=package.extras,
                     )
-        except Exception:
-            pass
+        except PackageNotFoundError:
+            # Re-raise so gather captures it and the caller can report it properly
+            raise
+        except (NetworkError, RateLimitError) as exc:
+            logger.warning(
+                "Package %r: PyPI metadata unavailable: %s: %s",
+                package.name,
+                type(exc).__name__,
+                exc,
+            )
+            failed_sources.append(f"PyPI data unavailable: {exc}")
 
         # Fetch repository metadata if available
         repo_metadata = None
@@ -203,15 +240,27 @@ class ReportGenerator:
                 try:
                     owner, repo = github_client.extract_repo_from_url(repo_url)
                     repo_metadata = await github_client.get_repository(owner, repo)
-                except Exception:
-                    pass
+                except (NetworkError, RateLimitError) as exc:
+                    logger.warning(
+                        "Package %r: GitHub data unavailable: %s: %s",
+                        package.name,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    failed_sources.append(f"GitHub data unavailable: {exc}")
 
         # Scan for vulnerabilities
         vulnerabilities = []
         try:
             vulnerabilities = await vuln_scanner.scan_package(package)
-        except Exception:
-            pass
+        except (NetworkError, RateLimitError) as exc:
+            logger.warning(
+                "Package %r: vulnerability scan unavailable: %s: %s",
+                package.name,
+                type(exc).__name__,
+                exc,
+            )
+            failed_sources.append(f"Vulnerability data unavailable: {exc}")
 
         # Calculate health score
         health = self.calculator.calculate(
@@ -219,6 +268,15 @@ class ReportGenerator:
             repo_metadata,
             vulnerabilities,
         )
+
+        # Attach risk factors and lower confidence for each failed data source (M-20)
+        if failed_sources:
+            health.risk_factors.extend(failed_sources)
+            # Drop confidence one level per failure, floor at LOW
+            if len(failed_sources) >= 2:
+                health.confidence = ConfidenceLevel.LOW
+            elif health.confidence == ConfidenceLevel.HIGH:
+                health.confidence = ConfidenceLevel.MEDIUM
 
         # Check for available updates
         update_available = None
@@ -260,23 +318,26 @@ class ReportGenerator:
             DependencyReport for the package.
         """
         package = PackageIdentifier(name=name, version=version)
-        reports = await self.generate_reports([package])
 
-        if not reports:
-            # Return a minimal report indicating failure
-            from dhm.core.models import HealthGrade, MaintenanceStatus
+        # Run generate_reports, but intercept PackageNotFoundError so it propagates
+        # to the caller rather than being silently swallowed (H-14).
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as session:
+            pypi_client = PyPIClient(session, cache=self.cache)
+            github_client = GitHubClient(session, token=self.github_token, cache=self.cache)
+            vuln_scanner = VulnerabilityScanner(session, cache=self.cache)
 
-            return DependencyReport(
-                package=package,
-                health=HealthScore(
-                    overall=0,
-                    grade=HealthGrade.F,
-                    maintenance_status=MaintenanceStatus.ABANDONED,
-                    risk_factors=["Package not found or unavailable"],
-                ),
+            # _generate_single_report re-raises PackageNotFoundError directly,
+            # so we let it escape here too.
+            report = await self._generate_single_report(
+                package,
+                pypi_client,
+                github_client,
+                vuln_scanner,
             )
 
-        return reports[0]
+        return report
 
     def format_reports(
         self,

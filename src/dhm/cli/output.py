@@ -20,8 +20,11 @@ from dhm.core.models import (
     MaintenanceStatus,
 )
 
-# Console instance for all output
+# Console instance for structured/report output (stdout)
 console = Console()
+
+# Console instance for status/diagnostic messages (stderr)
+err_console = Console(stderr=True)
 
 
 def get_grade_style(grade: HealthGrade) -> str:
@@ -190,6 +193,10 @@ def print_detailed_report(report: DependencyReport) -> None:
     console.print(f"  Community: {health.community_score:.0f}")
     console.print(f"  Popularity: {health.popularity_score:.0f}")
     console.print(f"  License: {health.license_score:.0f}")
+    console.print(
+        f"  Code Quality: {health.code_quality_score:.0f}/100"
+        " [dim](informational — not weighted into grade)[/]"
+    )
 
     # Maintenance status
     status_style = get_status_style(health.maintenance_status)
@@ -332,20 +339,20 @@ def print_alternatives_table(
 
 
 def print_error(message: str) -> None:
-    """Print an error message."""
-    console.print(f"[bold red]Error:[/] {message}")
+    """Print an error message to stderr."""
+    err_console.print(f"[bold red]Error:[/] {message}")
 
 
 def print_success(message: str) -> None:
-    """Print a success message."""
-    console.print(f"[bold green]Success:[/] {message}")
+    """Print a success message to stderr."""
+    err_console.print(f"[bold green]Success:[/] {message}")
 
 
 def print_warning(message: str) -> None:
-    """Print a warning message."""
-    console.print(f"[bold yellow]Warning:[/] {message}")
+    """Print a warning message to stderr."""
+    err_console.print(f"[bold yellow]Warning:[/] {message}")
 
 
 def print_info(message: str) -> None:
-    """Print an info message."""
-    console.print(f"[cyan]Info:[/] {message}")
+    """Print an info message to stderr."""
+    err_console.print(f"[cyan]Info:[/] {message}")
