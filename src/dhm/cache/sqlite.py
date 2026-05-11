@@ -252,6 +252,11 @@ class CacheLayer:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.get, key)
 
+    async def aget_value(self, key: str) -> Any | None:
+        """Async variant of get_value(). Safe to call from async contexts."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.get_value, key)
+
     async def aset(
         self,
         key: str,

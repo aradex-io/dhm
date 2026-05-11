@@ -87,7 +87,7 @@ class GitHubClient(Collector):
         # Check cache first
         cache_key = f"github:repo:{owner}/{repo}"
         if self.cache:
-            cached = self.cache.get_value(cache_key)
+            cached = await self.cache.aget_value(cache_key)
             if cached:
                 return RepositoryMetadata.from_dict(cached)
 
@@ -140,7 +140,7 @@ class GitHubClient(Collector):
                 # Cache the result
                 if self.cache:
                     try:
-                        self.cache.set(cache_key, metadata.to_dict(), self.CACHE_TTL)
+                        await self.cache.aset(cache_key, metadata.to_dict(), self.CACHE_TTL)
                     except Exception:
                         pass  # Don't fail on cache errors
 

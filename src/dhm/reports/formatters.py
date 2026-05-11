@@ -76,11 +76,13 @@ class JSONFormatter(Formatter):
         """Generate summary statistics for reports."""
         grades = {"A": 0, "B": 0, "C": 0, "D": 0, "F": 0}
         total_vulns = 0
+        open_vulns = 0
         unmaintained = 0
 
         for report in reports:
             grades[report.health.grade.value] += 1
             total_vulns += len(report.health.vulnerabilities)
+            open_vulns += len(report.health.open_vulnerabilities)
             if report.health.maintenance_status.is_concerning:
                 unmaintained += 1
 
@@ -89,6 +91,7 @@ class JSONFormatter(Formatter):
             "healthy_count": grades["A"] + grades["B"],
             "concerning_count": grades["D"] + grades["F"],
             "total_vulnerabilities": total_vulns,
+            "open_vulnerabilities_count": open_vulns,
             "unmaintained_count": unmaintained,
         }
 
