@@ -3,11 +3,11 @@
 **Date:** 27 January 2026
 **Author:** Architecture Review
 **Files Analyzed:**
-- `/home/jay/Documents/cyber/dev/planning_studio/dependency_health_monitor/src/dhm/core/calculator.py`
-- `/home/jay/Documents/cyber/dev/planning_studio/dependency_health_monitor/src/dhm/core/models.py`
-- `/home/jay/Documents/cyber/dev/planning_studio/dependency_health_monitor/src/dhm/collectors/github.py`
-- `/home/jay/Documents/cyber/dev/planning_studio/dependency_health_monitor/src/dhm/collectors/pypi.py`
-- `/home/jay/Documents/cyber/dev/planning_studio/dependency_health_monitor/src/dhm/collectors/vulnerability.py`
+- `src/dhm/core/calculator.py`
+- `src/dhm/core/models.py`
+- `src/dhm/collectors/github.py`
+- `src/dhm/collectors/pypi.py`
+- `src/dhm/collectors/vulnerability.py`
 
 ---
 

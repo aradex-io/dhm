@@ -37,9 +37,12 @@ from dhm.core.calculator import HealthCalculator
 from dhm.core.exceptions import (
     CacheError,
     DHMError,
+    NetworkError,
     PackageNotFoundError,
+    ParsingError,
     RateLimitError,
     RepositoryNotFoundError,
+    ValidationError,
 )
 
 # Data models
@@ -88,4 +91,7 @@ __all__ = [
     "RepositoryNotFoundError",
     "RateLimitError",
     "CacheError",
+    "ParsingError",
+    "ValidationError",
+    "NetworkError",
 ]

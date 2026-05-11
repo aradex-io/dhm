@@ -1,3 +1,5 @@
+> **Status:** Superseded by `architecture.md`. Retained for historical context.
+
 # Dependency Health Monitor - Architecture Document
 
 **Document Date:** 26 January 2026

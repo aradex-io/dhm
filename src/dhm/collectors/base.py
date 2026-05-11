@@ -4,12 +4,19 @@ Abstract base class for data collectors.
 Defines the interface that all collectors must implement.
 """
 
+import asyncio
+import json
+import logging
+import random
 from abc import ABC, abstractmethod
 from typing import Any
 
 import aiohttp
 
+from dhm.core.exceptions import ValidationError
 from dhm.core.validation import MAX_RESPONSE_SIZE, validate_response_size
+
+logger = logging.getLogger(__name__)
 
 
 class Collector(ABC):
@@ -101,3 +108,126 @@ class Collector(ABC):
                 validate_response_size(int(content_length), self.MAX_RESPONSE_SIZE)
             except ValueError:
                 pass  # Invalid Content-Length header, proceed with caution
+
+    async def _get_json(
+        self,
+        url: str,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[int, Any]:
+        """Fetch a URL and return (status_code, parsed_json_body).
+
+        Implements retry-with-exponential-backoff for transient failures:
+          - Retries on: ClientConnectionError, ServerDisconnectedError,
+            ClientPayloadError, asyncio.TimeoutError, HTTP 5xx.
+          - Does NOT retry on 4xx except 429.
+          - On 429, honours the ``Retry-After`` header (integer seconds)
+            or falls back to exponential backoff.
+          - Max 3 attempts (initial + 2 retries). Base delays: 1 s, 2 s
+            with ±20 % jitter.
+          - Enforces MAX_RESPONSE_SIZE on the actual body bytes (M-6)
+            in addition to the Content-Length pre-check.
+
+        Args:
+            url: The URL to fetch.
+            headers: Optional request headers.
+
+        Returns:
+            Tuple of (HTTP status code, parsed JSON body).  Callers are
+            responsible for interpreting non-200 status codes.
+
+        Raises:
+            ValidationError: If the response body exceeds MAX_RESPONSE_SIZE.
+            aiohttp.ClientError: After all retries are exhausted.
+            asyncio.TimeoutError: After all retries are exhausted.
+        """
+        max_attempts = 3
+        base_delays = [1.0, 2.0]  # seconds between attempt 1→2 and 2→3
+
+        _transient_exc = (
+            aiohttp.ClientConnectionError,
+            aiohttp.ServerDisconnectedError,
+            aiohttp.ClientPayloadError,
+            asyncio.TimeoutError,
+        )
+
+        last_exc: BaseException | None = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                async with self.session.get(url, headers=headers or {}) as response:
+                    status = response.status
+
+                    # --- Content-Length pre-check (early bail) ---
+                    self._check_response_size(response)
+
+                    # --- Decide whether to retry on this status ---
+                    if status == 429:
+                        if attempt < max_attempts:
+                            retry_after_hdr = response.headers.get("Retry-After")
+                            if retry_after_hdr is not None:
+                                try:
+                                    delay = float(retry_after_hdr)
+                                except ValueError:
+                                    delay = base_delays[attempt - 1]
+                            else:
+                                delay = base_delays[attempt - 1]
+                            delay *= 1 + random.uniform(-0.2, 0.2)  # ±20 % jitter
+                            logger.warning(
+                                "Retry %d/%d for %s after 429 (wait %.1fs)",
+                                attempt,
+                                max_attempts,
+                                url,
+                                delay,
+                            )
+                            await asyncio.sleep(delay)
+                            continue  # retry
+
+                    if 500 <= status < 600:
+                        if attempt < max_attempts:
+                            delay = base_delays[attempt - 1]
+                            delay *= 1 + random.uniform(-0.2, 0.2)
+                            logger.warning(
+                                "Retry %d/%d for %s after HTTP %d (wait %.1fs)",
+                                attempt,
+                                max_attempts,
+                                url,
+                                status,
+                                delay,
+                            )
+                            await asyncio.sleep(delay)
+                            continue  # retry
+
+                    # --- Read body with hard byte cap (M-6) ---
+                    max_bytes = self.MAX_RESPONSE_SIZE
+                    raw = await response.content.read(max_bytes + 1)
+                    if len(raw) > max_bytes:
+                        raise ValidationError(
+                            "response_size",
+                            f"{len(raw)} bytes",
+                            f"Response body exceeded {max_bytes} bytes",
+                        )
+                    data = json.loads(raw)
+                    return status, data
+
+            except _transient_exc as exc:
+                last_exc = exc
+                if attempt < max_attempts:
+                    delay = base_delays[attempt - 1]
+                    delay *= 1 + random.uniform(-0.2, 0.2)
+                    logger.warning(
+                        "Retry %d/%d for %s after %s: %s (wait %.1fs)",
+                        attempt,
+                        max_attempts,
+                        url,
+                        type(exc).__name__,
+                        exc,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    raise
+
+        # Should only be reached if max_attempts == 0 (never in practice)
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("_get_json: unreachable")

@@ -65,15 +65,6 @@ Issues = "https://github.com/jeremylaratro/dhm/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["src/dhm"]
 
-[tool.dhm]
-include_transitive = true
-cache_ttl = 3600
-
-[tool.dhm.thresholds]
-min_grade = "C"
-max_vulnerabilities = 0
-max_abandoned = 0
-
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

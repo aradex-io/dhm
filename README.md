@@ -147,21 +147,6 @@ dhm cache --cleanup
 dhm cache --invalidate 'github:%'
 ```
 
-## Configuration
-
-Add to your `pyproject.toml`:
-
-```toml
-[tool.dhm]
-include_transitive = true
-cache_ttl = 3600
-
-[tool.dhm.thresholds]
-min_grade = "C"
-max_vulnerabilities = 0
-max_abandoned = 0
-```
-
 ## CI/CD Integration
 
 ```yaml

@@ -25,6 +25,7 @@ Example:
 from pathlib import Path
 
 from dhm.core.models import DependencyReport, PackageIdentifier
+from dhm.core.validation import validate_package_name
 from dhm.reports.generator import ReportGenerator
 
 
@@ -57,6 +58,7 @@ async def check(
         >>> print(f"Open vulns: {len(report.health.open_vulnerabilities)}")
         Open vulns: 0
     """
+    validate_package_name(package)
     generator = ReportGenerator(
         github_token=github_token,
         use_cache=use_cache,
@@ -126,13 +128,15 @@ async def check_packages(
         use_cache=use_cache,
     )
 
-    # Parse package specifiers
+    # Parse package specifiers (validate each name before use)
     identifiers = []
     for pkg in packages:
         if "==" in pkg:
             name, version = pkg.split("==", 1)
+            validate_package_name(name.strip())
             identifiers.append(PackageIdentifier(name=name.strip(), version=version.strip()))
         else:
+            validate_package_name(pkg.strip())
             identifiers.append(PackageIdentifier(name=pkg.strip()))
 
     return await generator.generate_reports(identifiers)
@@ -147,7 +151,11 @@ def check_sync(
 ) -> DependencyReport:
     """Synchronous wrapper for check().
 
-    For use in non-async contexts. Creates a new event loop.
+    For use in non-async contexts. Creates a new event loop via asyncio.run().
+
+    Raises:
+        RuntimeError: If called from inside a running event loop; use the
+            async variant (check()) instead.
 
     Example:
         >>> from dhm import check_sync
@@ -155,7 +163,7 @@ def check_sync(
         >>> print(report.health.grade)
     """
     import asyncio
-    return asyncio.get_event_loop().run_until_complete(
+    return asyncio.run(
         check(package, version, github_token=github_token, use_cache=use_cache)
     )
 
@@ -168,7 +176,11 @@ def scan_sync(
 ) -> list[DependencyReport]:
     """Synchronous wrapper for scan().
 
-    For use in non-async contexts. Creates a new event loop.
+    For use in non-async contexts. Creates a new event loop via asyncio.run().
+
+    Raises:
+        RuntimeError: If called from inside a running event loop; use the
+            async variant (scan()) instead.
 
     Example:
         >>> from dhm import scan_sync
@@ -176,6 +188,6 @@ def scan_sync(
         >>> print(f"Scanned {len(reports)} packages")
     """
     import asyncio
-    return asyncio.get_event_loop().run_until_complete(
+    return asyncio.run(
         scan(path, github_token=github_token, use_cache=use_cache)
     )

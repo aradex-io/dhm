@@ -6,7 +6,7 @@ Provides formatters for JSON, Markdown, and rich table output.
 
 import json
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from dhm.core.models import (
@@ -65,7 +65,7 @@ class JSONFormatter(Formatter):
 
         if self.include_metadata:
             data["metadata"] = {
-                "generated_at": datetime.utcnow().isoformat(),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
                 "total_packages": len(reports),
                 "summary": self._generate_summary(reports),
             }
@@ -139,7 +139,7 @@ class MarkdownFormatter(Formatter):
         lines.extend(self._format_full_table(reports))
 
         # Footer
-        timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+        timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
         lines.extend([
             "",
             "---",
@@ -153,7 +153,19 @@ class MarkdownFormatter(Formatter):
         total = len(reports)
         healthy = sum(1 for r in reports if r.health.grade in (HealthGrade.A, HealthGrade.B))
         concerning = sum(1 for r in reports if r.health.grade in (HealthGrade.D, HealthGrade.F))
-        with_vulns = sum(1 for r in reports if r.health.vulnerabilities)
+
+        # H-12: Count packages with *open* (unpatched) vulnerabilities only.
+        # Prefer has_open_vulnerabilities if available; otherwise derive it
+        # from the vulnerability list without touching models.py.
+        def _has_open_vulns(report: DependencyReport) -> bool:
+            if hasattr(report.health, "has_open_vulnerabilities"):
+                return report.health.has_open_vulnerabilities
+            return any(
+                not v.is_fixed_in_installed_version
+                for v in report.health.vulnerabilities
+            )
+
+        with_open_vulns = sum(1 for r in reports if _has_open_vulns(r))
 
         return [
             "## Summary",
@@ -161,25 +173,55 @@ class MarkdownFormatter(Formatter):
             f"- **Total Dependencies:** {total}",
             f"- **Healthy (A/B):** {healthy}",
             f"- **Concerning (D/F):** {concerning}",
-            f"- **With Vulnerabilities:** {with_vulns}",
+            f"- **With Vulnerabilities:** {with_open_vulns}",
             "",
         ]
 
     def _format_vulnerabilities(self, reports: list[DependencyReport]) -> list[str]:
-        """Format the vulnerabilities section."""
+        """Format the vulnerabilities section.
+
+        Splits each package's vulnerabilities into two sub-sections:
+        - Open Vulnerabilities — Action Required (not yet fixed in installed version)
+        - Fixed Vulnerabilities — Historical (already patched)
+
+        Empty sub-sections are omitted entirely.  This mirrors the layout used
+        by the Rich terminal renderer so the Markdown output matches.
+        """
         lines = ["## Security Vulnerabilities", ""]
 
         for report in reports:
-            lines.append(f"### {report.package.name}")
+            open_vulns = [
+                v for v in report.health.vulnerabilities
+                if not v.is_fixed_in_installed_version
+            ]
+            fixed_vulns = [
+                v for v in report.health.vulnerabilities
+                if v.is_fixed_in_installed_version
+            ]
+
+            pkg_header = f"### {report.package.name}"
             if report.package.version:
-                lines.append(f"*Version: {report.package.version}*")
+                pkg_header += f" ({report.package.version})"
+            lines.append(pkg_header)
             lines.append("")
 
-            for vuln in report.health.vulnerabilities:
-                lines.append(f"- **{vuln.id}** ({vuln.severity.value}): {vuln.title}")
-                if vuln.fixed_version:
-                    lines.append(f"  - Fixed in: `{vuln.fixed_version}`")
-            lines.append("")
+            if open_vulns:
+                lines.append("#### Open Vulnerabilities — Action Required")
+                lines.append("")
+                for vuln in open_vulns:
+                    lines.append(f"- **{vuln.id}** ({vuln.severity.value}): {vuln.title}")
+                    if vuln.fixed_version:
+                        lines.append(f"  - Fixed in: `{vuln.fixed_version}`")
+                lines.append("")
+
+            if fixed_vulns:
+                lines.append("#### Fixed Vulnerabilities — Historical")
+                lines.append("")
+                for vuln in fixed_vulns:
+                    lines.append(f"- **{vuln.id}** ({vuln.severity.value}): {vuln.title}")
+                    if vuln.fixed_version:
+                        lines.append(f"  - Fixed in: `{vuln.fixed_version}`")
+                lines.append("")
 
         return lines
 

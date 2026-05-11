@@ -123,10 +123,14 @@ class HealthCalculator:
         if weights:
             self.weights.update(weights)
 
+        if any(v < 0 for v in self.weights.values()):
+            raise ValueError("HealthCalculator weights must be non-negative")
+
         # Normalize weights to sum to 1.0
         total = sum(self.weights.values())
-        if total > 0:
-            self.weights = {k: v / total for k, v in self.weights.items()}
+        if total <= 0:
+            raise ValueError("HealthCalculator weights must sum to a positive value")
+        self.weights = {k: v / total for k, v in self.weights.items()}
 
     def calculate(
         self,
@@ -150,6 +154,10 @@ class HealthCalculator:
         popularity = self._calculate_popularity_score(pypi, repo)
         code_quality = self._calculate_quality_score(repo)
         license_score = self._calculate_license_score(pypi, repo)
+
+        # NOTE: code_quality_score and license_score are computed and exposed on
+        # HealthScore for transparency, but are intentionally NOT weighted into
+        # the overall grade in the current scoring rubric. See docs/SCORING_*.
 
         # Calculate weighted overall score
         overall = (
