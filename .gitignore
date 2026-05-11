@@ -207,7 +207,11 @@ marimo/_lsp/
 __marimo__/
 
 # AI Assistant / Claude Code
-.claude/
+# Ignore everything under .claude/ except team-shared settings + hooks.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+.claude/settings.local.json
 CLAUDE.md
 *.claude.md
 
