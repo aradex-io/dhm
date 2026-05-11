@@ -11,13 +11,16 @@ from enum import Enum
 
 
 class HealthGrade(Enum):
-    """Letter grades for dependency health."""
+    """Letter grades for dependency health.
 
-    A = "A"  # Excellent (90-100)
-    B = "B"  # Good (80-89)
-    C = "C"  # Acceptable (70-79)
-    D = "D"  # Concerning (60-69)
-    F = "F"  # Critical (<60)
+    Thresholds defined in HealthCalculator._score_to_grade.
+    """
+
+    A = "A"  # Excellent (≥85)
+    B = "B"  # Good (≥75)
+    C = "C"  # Acceptable (≥65)
+    D = "D"  # Concerning (≥55)
+    F = "F"  # Critical (<55)
 
     def __str__(self) -> str:
         return self.value
@@ -224,7 +227,6 @@ class PyPIMetadata:
         """Check if package appears deprecated based on classifiers."""
         deprecated_classifiers = [
             "Development Status :: 7 - Inactive",
-            "Development Status :: 1 - Planning",
         ]
         return any(c in self.classifiers for c in deprecated_classifiers)
 
@@ -394,7 +396,13 @@ class RepositoryMetadata:
 
 @dataclass
 class HealthScore:
-    """Composite health score for a package."""
+    """Composite health score for a package.
+
+    NOTE: code_quality_score and license_score are computed and exposed here
+    for transparency, but are intentionally NOT weighted into the overall grade
+    in the current scoring rubric. See docs/SCORING_* and
+    HealthCalculator._score_to_grade for details.
+    """
 
     overall: float  # 0-100
     grade: HealthGrade
@@ -497,7 +505,7 @@ class DependencyReport:
         """Return True if this dependency needs attention."""
         return (
             self.health.is_concerning
-            or self.health.has_vulnerabilities
+            or self.health.has_open_vulnerabilities
             or self.health.maintenance_status.is_concerning
         )
 
@@ -523,9 +531,11 @@ class DependencyReport:
                         "severity": v.severity.value,
                         "title": v.title,
                         "fixed_version": v.fixed_version,
+                        "is_open": not v.is_fixed_in_installed_version,
                     }
                     for v in self.health.vulnerabilities
                 ],
+                "open_vulnerabilities_count": len(self.health.open_vulnerabilities),
                 "risk_factors": self.health.risk_factors,
                 "positive_factors": self.health.positive_factors,
             },

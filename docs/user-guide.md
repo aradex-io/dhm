@@ -170,8 +170,6 @@ dhm scan -f json -o report.json
 **Supports multiple dependency formats:**
 - `pyproject.toml` (modern Python projects)
 - `requirements.txt`
-- `setup.py` / `setup.cfg`
-- `Pipfile` / `Pipfile.lock`
 
 **Output example (table format):**
 

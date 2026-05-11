@@ -130,8 +130,17 @@ class AlternativesRecommender:
     }
 
     def __init__(self):
-        """Initialize the alternatives recommender."""
-        pass
+        """Initialize the alternatives recommender.
+
+        Instance-level copies of the class-level dicts are made so that
+        mutations via ``add_known_alternative`` are isolated per-instance
+        and do not leak across instances or races between concurrent
+        ``ReportGenerator`` workers (M-13).
+        """
+        self.known_alternatives: dict[str, list[str]] = {
+            k: list(v) for k, v in self.KNOWN_ALTERNATIVES.items()
+        }
+        self.migration_efforts: dict[tuple[str, str], str] = dict(self.MIGRATION_EFFORTS)
 
     def find_alternatives(
         self,
@@ -151,7 +160,7 @@ class AlternativesRecommender:
         alternatives = []
 
         # Get known alternatives
-        known = self.KNOWN_ALTERNATIVES.get(pkg_name, [])
+        known = self.known_alternatives.get(pkg_name, [])
 
         for alt_name in known:
             alt = AlternativePackage(
@@ -185,7 +194,7 @@ class AlternativesRecommender:
         alternatives = []
 
         # Get known alternatives
-        known = self.KNOWN_ALTERNATIVES.get(pkg_name, [])
+        known = self.known_alternatives.get(pkg_name, [])
 
         for alt_name in known:
             try:
@@ -234,12 +243,12 @@ class AlternativesRecommender:
             Effort level: "low", "medium", or "high".
         """
         # Check known migration efforts
-        effort = self.MIGRATION_EFFORTS.get((from_pkg, to_pkg))
+        effort = self.migration_efforts.get((from_pkg, to_pkg))
         if effort:
             return effort
 
         # Check reverse direction
-        effort = self.MIGRATION_EFFORTS.get((to_pkg, from_pkg))
+        effort = self.migration_efforts.get((to_pkg, from_pkg))
         if effort:
             return effort
 
@@ -372,7 +381,7 @@ class AlternativesRecommender:
             List of alternative package names.
         """
         normalized = package_name.lower().replace("_", "-")
-        return self.KNOWN_ALTERNATIVES.get(normalized, [])
+        return self.known_alternatives.get(normalized, [])
 
     def add_known_alternative(
         self,
@@ -389,10 +398,10 @@ class AlternativesRecommender:
         """
         normalized = package_name.lower().replace("_", "-")
 
-        if normalized not in self.KNOWN_ALTERNATIVES:
-            self.KNOWN_ALTERNATIVES[normalized] = []
+        if normalized not in self.known_alternatives:
+            self.known_alternatives[normalized] = []
 
-        if alternative not in self.KNOWN_ALTERNATIVES[normalized]:
-            self.KNOWN_ALTERNATIVES[normalized].append(alternative)
+        if alternative not in self.known_alternatives[normalized]:
+            self.known_alternatives[normalized].append(alternative)
 
-        self.MIGRATION_EFFORTS[(normalized, alternative)] = effort
+        self.migration_efforts[(normalized, alternative)] = effort

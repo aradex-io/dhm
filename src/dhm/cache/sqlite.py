@@ -5,6 +5,7 @@ Provides persistent caching for API responses with TTL-based expiration
 and ETag support for conditional requests.
 """
 
+import asyncio
 import json
 import sqlite3
 from collections.abc import Generator
@@ -42,7 +43,10 @@ class CacheLayer:
         self.default_ttl = default_ttl
 
         # Ensure parent directory exists
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise CacheError("initialization", str(e))
 
         # Initialize database
         self._init_db()
@@ -51,6 +55,15 @@ class CacheLayer:
         """Initialize the cache database schema."""
         try:
             with self._connection() as conn:
+                # Verify WAL mode was successfully activated
+                row = conn.execute("PRAGMA journal_mode;").fetchone()
+                journal_mode = row[0] if row else ""
+                if journal_mode != "wal":
+                    raise CacheError(
+                        "initialization",
+                        f"Failed to enable WAL journal mode (got '{journal_mode}')",
+                    )
+
                 conn.executescript("""
                     CREATE TABLE IF NOT EXISTS cache (
                         key TEXT PRIMARY KEY,
@@ -79,9 +92,12 @@ class CacheLayer:
         conn = sqlite3.connect(
             self.db_path,
             detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
+            timeout=10,
         )
         conn.row_factory = sqlite3.Row
         try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA busy_timeout=10000;")
             yield conn
             conn.commit()
         except sqlite3.Error as e:
@@ -225,6 +241,42 @@ class CacheLayer:
             Number of entries removed.
         """
         return self.invalidate("%")
+
+    # ------------------------------------------------------------------
+    # Async variants — run sync methods in the default executor so that
+    # blocking SQLite I/O does not stall the event loop.
+    # ------------------------------------------------------------------
+
+    async def aget(self, key: str) -> tuple[Any, str | None] | None:
+        """Async variant of get(). Safe to call from async contexts."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.get, key)
+
+    async def aget_value(self, key: str) -> Any | None:
+        """Async variant of get_value(). Safe to call from async contexts."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.get_value, key)
+
+    async def aset(
+        self,
+        key: str,
+        value: Any,
+        ttl_seconds: int | None = None,
+        etag: str | None = None,
+    ) -> None:
+        """Async variant of set(). Safe to call from async contexts."""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self.set, key, value, ttl_seconds, etag)
+
+    async def adelete(self, key: str) -> bool:
+        """Async variant of delete(). Safe to call from async contexts."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.delete, key)
+
+    async def ainvalidate(self, pattern: str) -> int:
+        """Async variant of invalidate(). Safe to call from async contexts."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.invalidate, pattern)
 
     def stats(self) -> dict[str, Any]:
         """Get cache statistics.

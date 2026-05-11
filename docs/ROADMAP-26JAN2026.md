@@ -1,3 +1,5 @@
+> **Status:** Phase 1 (initial release) is shipped as v0.1.0. Items below remain as the historical roadmap.
+
 # Dependency Health Monitor - Project Roadmap
 
 **Document Date:** 26 January 2026

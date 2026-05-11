@@ -1365,17 +1365,17 @@ Key files and their locations:
 
 | File | Path | Purpose |
 |------|------|---------|
-| Package exports | `/home/jay/Documents/cyber/dev/planning_studio/dependency_health_monitor/src/dhm/__init__.py` | Public API surface |
-| Data models | `/home/jay/Documents/cyber/dev/planning_studio/dependency_health_monitor/src/dhm/core/models.py` | Core data structures |
-| Health calculator | `/home/jay/Documents/cyber/dev/planning_studio/dependency_health_monitor/src/dhm/core/calculator.py` | Scoring algorithm |
-| Dependency resolver | `/home/jay/Documents/cyber/dev/planning_studio/dependency_health_monitor/src/dhm/core/resolver.py` | File parsing |
-| PyPI client | `/home/jay/Documents/cyber/dev/planning_studio/dependency_health_monitor/src/dhm/collectors/pypi.py` | PyPI API integration |
-| GitHub client | `/home/jay/Documents/cyber/dev/planning_studio/dependency_health_monitor/src/dhm/collectors/github.py` | GitHub API integration |
-| Vulnerability scanner | `/home/jay/Documents/cyber/dev/planning_studio/dependency_health_monitor/src/dhm/collectors/vulnerability.py` | OSV integration |
-| Cache layer | `/home/jay/Documents/cyber/dev/planning_studio/dependency_health_monitor/src/dhm/cache/sqlite.py` | SQLite caching |
-| Report generator | `/home/jay/Documents/cyber/dev/planning_studio/dependency_health_monitor/src/dhm/reports/generator.py` | Orchestration |
-| Formatters | `/home/jay/Documents/cyber/dev/planning_studio/dependency_health_monitor/src/dhm/reports/formatters.py` | Output formats |
-| CLI | `/home/jay/Documents/cyber/dev/planning_studio/dependency_health_monitor/src/dhm/cli/main.py` | Command-line interface |
+| Package exports | `src/dhm/__init__.py` | Public API surface |
+| Data models | `src/dhm/core/models.py` | Core data structures |
+| Health calculator | `src/dhm/core/calculator.py` | Scoring algorithm |
+| Dependency resolver | `src/dhm/core/resolver.py` | File parsing |
+| PyPI client | `src/dhm/collectors/pypi.py` | PyPI API integration |
+| GitHub client | `src/dhm/collectors/github.py` | GitHub API integration |
+| Vulnerability scanner | `src/dhm/collectors/vulnerability.py` | OSV integration |
+| Cache layer | `src/dhm/cache/sqlite.py` | SQLite caching |
+| Report generator | `src/dhm/reports/generator.py` | Orchestration |
+| Formatters | `src/dhm/reports/formatters.py` | Output formats |
+| CLI | `src/dhm/cli/main.py` | Command-line interface |
 
 ---
 

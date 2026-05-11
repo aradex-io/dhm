@@ -1317,7 +1317,7 @@ dev = [
 
 ```toml
 [tool.poetry.dependencies]
-python = "^3.9"
+python = "^3.10"
 requests = "^2.28.0"
 django = {version = "^4.2", extras = ["psycopg2"]}
 
@@ -1946,7 +1946,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install DHM
-        run: pip install dhm
+        run: pip install dependency-health-monitor
 
       - name: Run health check
         env:
@@ -2008,7 +2008,7 @@ No, DHM requires internet access to fetch data from PyPI, GitHub, and vulnerabil
 
 ### What Python versions are supported?
 
-DHM supports Python 3.9+.
+DHM supports Python 3.10+.
 
 ---
 

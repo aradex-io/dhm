@@ -74,9 +74,7 @@ class RequirementsTxtSource(DependencySource):
         name = path.name.lower()
         return (
             name == "requirements.txt"
-            or name.startswith("requirements")
-            and name.endswith(".txt")
-            or name in ("requirements-dev.txt", "requirements-test.txt", "requirements-prod.txt")
+            or (name.startswith("requirements") and name.endswith(".txt"))
         )
 
     def parse(

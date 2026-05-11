@@ -7,12 +7,15 @@ finding alternatives, and managing the cache.
 
 import asyncio
 import sys
+import traceback
 from pathlib import Path
 
 import click
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 from dhm import __version__
 from dhm.cli.output import (
+    err_console,
     print_alternatives_table,
     print_detailed_report,
     print_error,
@@ -22,10 +25,15 @@ from dhm.cli.output import (
 )
 from dhm.core.models import RiskLevel
 
+# Exit codes
+EXIT_OK = 0        # No issues found / successful run
+EXIT_THRESHOLD = 1  # --fail-on threshold was breached
+EXIT_ERROR = 2     # Tool/runtime error (network, parse, unexpected exception)
+
 
 def run_async(coro):
-    """Run an async coroutine in the event loop."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Run an async coroutine in a new event loop."""
+    return asyncio.run(coro)
 
 
 @click.group()
@@ -35,15 +43,28 @@ def run_async(coro):
     envvar="GITHUB_TOKEN",
     help="GitHub API token for higher rate limits.",
 )
+@click.option(
+    "--debug",
+    is_flag=True,
+    default=False,
+    help="Print full tracebacks on errors.",
+)
 @click.pass_context
-def cli(ctx: click.Context, github_token: str | None) -> None:
+def cli(ctx: click.Context, github_token: str | None, debug: bool) -> None:
     """Dependency Health Monitor - Know your dependencies.
 
     DHM analyzes your project dependencies and provides health scores
     based on security, maintenance, community, and popularity metrics.
+
+    \b
+    Exit codes:
+      0  Clean — no threshold violations, no errors.
+      1  Threshold breached — --fail-on condition was met.
+      2  Tool error — network failure, parse error, or unexpected exception.
     """
     ctx.ensure_object(dict)
     ctx.obj["github_token"] = github_token
+    ctx.obj["debug"] = debug
 
 
 @cli.command()
@@ -84,15 +105,22 @@ def scan(
     directory) and displays a health report.
 
     \b
+    Exit codes:
+      0  No issues found (or none at the requested severity).
+      1  One or more open vulnerabilities at or above --fail-on severity.
+      2  Tool error (network, parse, or unexpected exception).
+
+    \b
     Examples:
-        dhm scan                    # Scan current directory
-        dhm scan /path/to/project   # Scan specific project
+        dhm scan                         # Scan current directory
+        dhm scan /path/to/project        # Scan specific project
         dhm scan -f json -o report.json  # Output as JSON
-        dhm scan --fail-on high     # Exit 1 if high+ severity issues
+        dhm scan --fail-on high          # Exit 1 if high+ severity open issues
     """
     from dhm.reports.generator import ReportGenerator
 
     github_token = ctx.obj.get("github_token")
+    debug = ctx.obj.get("debug", False)
     project_path = Path(path)
 
     generator = ReportGenerator(
@@ -101,13 +129,13 @@ def scan(
     )
 
     try:
-        with click.progressbar(
-            length=100,
-            label="Scanning dependencies",
-            show_percent=True,
-        ) as bar:
-            # Run the async generation
-            bar.update(10)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            TimeElapsedColumn(),
+            console=err_console,
+        ) as progress:
+            task = progress.add_task("Scanning dependencies...", total=None)
             reports, formatted = run_async(
                 generator.generate(
                     project_path,
@@ -115,7 +143,7 @@ def scan(
                     output_path=Path(output) if output else None,
                 )
             )
-            bar.update(90)
+            progress.update(task, description="Scan complete.")
 
         if not reports:
             print_info("No dependencies found in project.")
@@ -124,7 +152,8 @@ def scan(
         # Output results
         if format == "table":
             print_table(reports)
-        else:
+        elif not output:
+            # Only echo structured output to stdout when not writing to a file
             click.echo(formatted)
 
         if output:
@@ -135,11 +164,13 @@ def scan(
             exit_code = _check_threshold(reports, fail_on)
             if exit_code:
                 print_error(f"Found issues at or above {fail_on} severity.")
-                sys.exit(exit_code)
+                sys.exit(EXIT_THRESHOLD)
 
     except Exception as e:
         print_error(f"Scan failed: {e}")
-        sys.exit(1)
+        if debug:
+            err_console.print(traceback.format_exc())
+        sys.exit(EXIT_ERROR)
 
 
 @cli.command()
@@ -163,24 +194,28 @@ def check(ctx: click.Context, package: str, version: str | None) -> None:
     from dhm.reports.generator import ReportGenerator
 
     github_token = ctx.obj.get("github_token")
+    debug = ctx.obj.get("debug", False)
 
     generator = ReportGenerator(github_token=github_token)
 
     try:
-        with click.progressbar(
-            length=100,
-            label=f"Checking {package}",
-            show_percent=True,
-        ) as bar:
-            bar.update(10)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            TimeElapsedColumn(),
+            console=err_console,
+        ) as progress:
+            task = progress.add_task(f"Checking {package}...", total=None)
             report = run_async(generator.check_package(package, version))
-            bar.update(90)
+            progress.update(task, description="Done.")
 
         print_detailed_report(report)
 
     except Exception as e:
         print_error(f"Check failed: {e}")
-        sys.exit(1)
+        if debug:
+            err_console.print(traceback.format_exc())
+        sys.exit(EXIT_ERROR)
 
 
 @cli.command()
@@ -200,21 +235,23 @@ def alternatives(ctx: click.Context, package: str) -> None:
     from dhm.reports.generator import ReportGenerator
 
     github_token = ctx.obj.get("github_token")
+    debug = ctx.obj.get("debug", False)
 
     generator = ReportGenerator(github_token=github_token)
     recommender = AlternativesRecommender()
 
     try:
-        with click.progressbar(
-            length=100,
-            label=f"Finding alternatives for {package}",
-            show_percent=True,
-        ) as bar:
-            bar.update(10)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            TimeElapsedColumn(),
+            console=err_console,
+        ) as progress:
+            task = progress.add_task(f"Finding alternatives for {package}...", total=None)
 
             # First check the original package
             report = run_async(generator.check_package(package))
-            bar.update(40)
+            progress.update(task, description=f"Finding alternatives for {package}...")
 
             # Find alternatives
             alts = run_async(
@@ -224,7 +261,7 @@ def alternatives(ctx: click.Context, package: str) -> None:
                     generator,
                 )
             )
-            bar.update(50)
+            progress.update(task, description="Done.")
 
         if not alts:
             print_info(f"No better alternatives found for {package}.")
@@ -237,7 +274,9 @@ def alternatives(ctx: click.Context, package: str) -> None:
 
     except Exception as e:
         print_error(f"Search failed: {e}")
-        sys.exit(1)
+        if debug:
+            err_console.print(traceback.format_exc())
+        sys.exit(EXIT_ERROR)
 
 
 @cli.command()
@@ -247,7 +286,13 @@ def alternatives(ctx: click.Context, package: str) -> None:
 @click.option(
     "--invalidate", type=str, help="Invalidate entries matching pattern (e.g., 'github:%')"
 )
-def cache(clear: bool, stats: bool, cleanup: bool, invalidate: str | None) -> None:
+@click.option(
+    "--yes", "-y",
+    is_flag=True,
+    default=False,
+    help="Skip confirmation prompt (for scripted use).",
+)
+def cache(clear: bool, stats: bool, cleanup: bool, invalidate: str | None, yes: bool) -> None:
     """Manage the local cache.
 
     DHM caches API responses to improve performance and reduce
@@ -272,6 +317,11 @@ def cache(clear: bool, stats: bool, cleanup: bool, invalidate: str | None) -> No
     cache_layer = CacheLayer()
 
     if clear:
+        if not yes:
+            click.confirm(
+                "Clear all cached data? This cannot be undone.",
+                abort=True,
+            )
         count = cache_layer.clear()
         print_success(f"Cache cleared. Removed {count} entries.")
     elif cleanup:
@@ -308,14 +358,17 @@ def cache(clear: bool, stats: bool, cleanup: bool, invalidate: str | None) -> No
 
 
 def _check_threshold(reports: list, fail_on: str) -> int:
-    """Check if any reports exceed the severity threshold.
+    """Check if any reports have open vulnerabilities exceeding the threshold.
+
+    Only open vulnerabilities (not already-patched historical ones) are
+    considered, so projects pinned to a fixed version are not penalised.
 
     Args:
         reports: List of DependencyReport objects.
         fail_on: Minimum severity to fail on.
 
     Returns:
-        Exit code (0 = pass, 1 = fail).
+        EXIT_THRESHOLD if any open vulnerability meets the threshold, else EXIT_OK.
     """
     threshold_map = {
         "critical": RiskLevel.CRITICAL,
@@ -326,16 +379,16 @@ def _check_threshold(reports: list, fail_on: str) -> int:
 
     threshold = threshold_map.get(fail_on)
     if not threshold:
-        return 0
+        return EXIT_OK
 
     threshold_order = threshold.sort_order
 
     for report in reports:
-        for vuln in report.health.vulnerabilities:
+        for vuln in report.health.open_vulnerabilities:
             if vuln.severity.sort_order <= threshold_order:
-                return 1
+                return EXIT_THRESHOLD
 
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

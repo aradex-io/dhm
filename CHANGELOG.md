@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 - Removed `.claude/` from version control (now in .gitignore)
+- Removed non-functional `[tool.dhm]` / `[tool.dhm.thresholds]` configuration block from `pyproject.toml` and the corresponding "Configuration" section from `README.md`; the config keys were never read by the tool
 
 ---
 

@@ -89,7 +89,7 @@ class PyPIClient(Collector):
         # Check cache first
         cache_key = f"pypi:pkg:{name}:{version or 'latest'}"
         if self.cache:
-            cached = self.cache.get_value(cache_key)
+            cached = await self.cache.aget_value(cache_key)
             if cached:
                 return PyPIMetadata.from_dict(cached)
 
@@ -102,31 +102,25 @@ class PyPIClient(Collector):
             url = f"{self.BASE_URL}/{encoded_name}/json"
 
         try:
-            async with self.session.get(
-                url,
-                headers=self._build_headers(),
-            ) as resp:
-                if resp.status == 404:
-                    raise PackageNotFoundError(name)
-                if resp.status == 429:
-                    raise RateLimitError("PyPI")
-                if resp.status != 200:
-                    raise NetworkError(url, resp.status)
+            status, data = await self._get_json(url, headers=self._build_headers())
 
-                # Check response size before parsing
-                self._check_response_size(resp)
+            if status == 404:
+                raise PackageNotFoundError(name)
+            if status == 429:
+                raise RateLimitError("PyPI")
+            if status != 200:
+                raise NetworkError(url, status)
 
-                data = await resp.json()
-                metadata = self._parse_response(data)
+            metadata = self._parse_response(data)
 
-                # Cache the result
-                if self.cache:
-                    try:
-                        self.cache.set(cache_key, metadata.to_dict(), self.CACHE_TTL)
-                    except Exception:
-                        pass  # Don't fail on cache errors
+            # Cache the result
+            if self.cache:
+                try:
+                    await self.cache.aset(cache_key, metadata.to_dict(), self.CACHE_TTL)
+                except Exception:
+                    pass  # Don't fail on cache errors
 
-                return metadata
+            return metadata
 
         except aiohttp.ClientError as e:
             raise NetworkError(url, details=str(e))
@@ -144,31 +138,28 @@ class PyPIClient(Collector):
         url = f"{self.BASE_URL}/{encoded_name}/json"
 
         try:
-            async with self.session.get(
-                url,
-                headers=self._build_headers(),
-            ) as resp:
-                if resp.status == 404:
-                    raise PackageNotFoundError(name)
-                if resp.status != 200:
-                    raise NetworkError(url, resp.status)
+            status, data = await self._get_json(url, headers=self._build_headers())
 
-                data = await resp.json()
-                releases = []
+            if status == 404:
+                raise PackageNotFoundError(name)
+            if status != 200:
+                raise NetworkError(url, status)
 
-                for version, files in data.get("releases", {}).items():
-                    if files:  # Skip yanked/empty releases
-                        releases.append({
-                            "version": version,
-                            "upload_time": files[0].get("upload_time"),
-                            "yanked": files[0].get("yanked", False),
-                        })
+            releases = []
 
-                return sorted(
-                    releases,
-                    key=lambda r: r.get("upload_time", ""),
-                    reverse=True,
-                )
+            for version, files in data.get("releases", {}).items():
+                if files:  # Skip yanked/empty releases
+                    releases.append({
+                        "version": version,
+                        "upload_time": files[0].get("upload_time"),
+                        "yanked": files[0].get("yanked", False),
+                    })
+
+            return sorted(
+                releases,
+                key=lambda r: r.get("upload_time", ""),
+                reverse=True,
+            )
 
         except aiohttp.ClientError as e:
             raise NetworkError(url, details=str(e))
@@ -247,32 +238,30 @@ class PyPIClient(Collector):
         # Check cache first
         cache_key = f"pypistats:downloads:{name}"
         if self.cache:
-            cached = self.cache.get_value(cache_key)
+            cached = await self.cache.aget_value(cache_key)
             if cached is not None:
                 return cached
 
-        url = f"https://pypistats.org/api/packages/{name}/recent"
+        encoded_name = encode_package_name_for_url(name)
+        url = f"https://pypistats.org/api/packages/{encoded_name}/recent"
 
         try:
-            async with self.session.get(
-                url,
-                headers={"Accept": "application/json"},
-            ) as resp:
-                if resp.status != 200:
-                    return 0
+            status, data = await self._get_json(url, headers=self._build_headers())
 
-                data = await resp.json()
-                # pypistats returns {"data": {"last_month": 12345, ...}}
-                downloads = data.get("data", {}).get("last_month", 0)
+            if status != 200:
+                return 0
 
-                # Cache the result
-                if self.cache:
-                    try:
-                        self.cache.set(cache_key, downloads, self.DOWNLOAD_CACHE_TTL)
-                    except Exception:
-                        pass
+            # pypistats returns {"data": {"last_month": 12345, ...}}
+            downloads = data.get("data", {}).get("last_month", 0)
 
-                return downloads
+            # Cache the result
+            if self.cache:
+                try:
+                    await self.cache.aset(cache_key, downloads, self.DOWNLOAD_CACHE_TTL)
+                except Exception:
+                    pass
+
+            return downloads
 
         except Exception:
             return 0

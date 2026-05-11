@@ -242,6 +242,73 @@ class TestHealthScore:
         assert len(score.critical_vulnerabilities) == 1
         assert score.critical_vulnerabilities[0].id == "CVE-2024-CRITICAL"
 
+    def test_open_vulnerabilities_returns_only_unpatched(self):
+        """open_vulnerabilities returns only vulns where is_open is True (M-22/C-1)."""
+        open_vuln = Vulnerability(
+            id="CVE-2024-OPEN",
+            severity=RiskLevel.HIGH,
+            title="Open issue",
+            description="Not fixed",
+            affected_versions=">=1.0.0",
+            is_fixed_in_installed_version=False,
+        )
+        fixed_vuln = Vulnerability(
+            id="CVE-2023-FIXED",
+            severity=RiskLevel.MEDIUM,
+            title="Already patched",
+            description="Fixed in 2.0",
+            affected_versions=">=1.0.0,<2.0.0",
+            fixed_version="2.0.0",
+            is_fixed_in_installed_version=True,
+        )
+        score = HealthScore(
+            overall=80,
+            grade=HealthGrade.B,
+            vulnerabilities=[open_vuln, fixed_vuln],
+        )
+        assert len(score.open_vulnerabilities) == 1
+        assert score.open_vulnerabilities[0].id == "CVE-2024-OPEN"
+
+    def test_has_open_vulnerabilities_matches_list_length(self):
+        """has_open_vulnerabilities matches len(open_vulnerabilities) > 0."""
+        open_vuln = Vulnerability(
+            id="CVE-2024-OPEN",
+            severity=RiskLevel.HIGH,
+            title="Open",
+            description="",
+            affected_versions="*",
+            is_fixed_in_installed_version=False,
+        )
+        fixed_vuln = Vulnerability(
+            id="CVE-2023-FIXED",
+            severity=RiskLevel.LOW,
+            title="Fixed",
+            description="",
+            affected_versions="*",
+            is_fixed_in_installed_version=True,
+        )
+
+        # One open → has_open_vulnerabilities is True
+        score_with_open = HealthScore(
+            overall=75, grade=HealthGrade.B,
+            vulnerabilities=[open_vuln, fixed_vuln],
+        )
+        assert score_with_open.has_open_vulnerabilities is True
+        assert score_with_open.has_open_vulnerabilities == (
+            len(score_with_open.open_vulnerabilities) > 0
+        )
+
+        # Only fixed → has_open_vulnerabilities is False
+        score_all_fixed = HealthScore(
+            overall=90, grade=HealthGrade.A,
+            vulnerabilities=[fixed_vuln],
+        )
+        assert score_all_fixed.has_open_vulnerabilities is False
+
+        # No vulns → has_open_vulnerabilities is False
+        empty_score = HealthScore(overall=95, grade=HealthGrade.A)
+        assert empty_score.has_open_vulnerabilities is False
+
 
 class TestDependencyReport:
     """Tests for DependencyReport dataclass."""
@@ -269,6 +336,29 @@ class TestDependencyReport:
         )
         assert report_bad_grade.needs_attention
 
+    def test_needs_attention_false_when_all_vulns_are_fixed(self):
+        """needs_attention is False when all vulnerabilities are fixed (M-22)."""
+        fixed_vuln = Vulnerability(
+            id="CVE-2023-HISTORICAL",
+            severity=RiskLevel.HIGH,
+            title="Historical CVE — patched",
+            description="Fixed in installed version",
+            affected_versions=">=1.0.0,<2.0.0",
+            fixed_version="2.0.0",
+            is_fixed_in_installed_version=True,
+        )
+        report = DependencyReport(
+            package=PackageIdentifier(name="requests", version="2.0.0"),
+            health=HealthScore(
+                overall=88,
+                grade=HealthGrade.A,
+                vulnerabilities=[fixed_vuln],
+                maintenance_status=MaintenanceStatus.ACTIVE,
+            ),
+        )
+        # All vulns are fixed → needs_attention must be False (C-1/M-22 regression guard)
+        assert report.needs_attention is False
+
     def test_to_dict(self, sample_dependency_report):
         """Test to_dict serialization."""
         result = sample_dependency_report.to_dict()
@@ -279,3 +369,69 @@ class TestDependencyReport:
         assert result["health"]["overall"] == 85.0
         assert result["update_available"] == "2.31.0"
         assert result["is_direct"] is True
+
+    def test_to_dict_includes_is_open_per_vuln(self):
+        """to_dict() includes 'is_open' for each vulnerability (H-9)."""
+        open_vuln = Vulnerability(
+            id="CVE-OPEN",
+            severity=RiskLevel.HIGH,
+            title="Open",
+            description="",
+            affected_versions="*",
+            is_fixed_in_installed_version=False,
+        )
+        fixed_vuln = Vulnerability(
+            id="CVE-FIXED",
+            severity=RiskLevel.LOW,
+            title="Fixed",
+            description="",
+            affected_versions="*",
+            fixed_version="2.0.0",
+            is_fixed_in_installed_version=True,
+        )
+        report = DependencyReport(
+            package=PackageIdentifier(name="test", version="2.0.0"),
+            health=HealthScore(
+                overall=70,
+                grade=HealthGrade.C,
+                vulnerabilities=[open_vuln, fixed_vuln],
+            ),
+        )
+        result = report.to_dict()
+        vuln_dicts = {v["id"]: v for v in result["health"]["vulnerabilities"]}
+
+        assert "is_open" in vuln_dicts["CVE-OPEN"], "to_dict() must include 'is_open' per vuln"
+        assert vuln_dicts["CVE-OPEN"]["is_open"] is True
+        assert vuln_dicts["CVE-FIXED"]["is_open"] is False
+
+    def test_to_dict_includes_open_vulnerabilities_count(self):
+        """to_dict() includes 'open_vulnerabilities_count' in the health block (H-9)."""
+        open_vuln = Vulnerability(
+            id="CVE-OPEN-1",
+            severity=RiskLevel.MEDIUM,
+            title="Open",
+            description="",
+            affected_versions="*",
+            is_fixed_in_installed_version=False,
+        )
+        fixed_vuln = Vulnerability(
+            id="CVE-FIXED-1",
+            severity=RiskLevel.LOW,
+            title="Fixed",
+            description="",
+            affected_versions="*",
+            is_fixed_in_installed_version=True,
+        )
+        report = DependencyReport(
+            package=PackageIdentifier(name="test"),
+            health=HealthScore(
+                overall=75,
+                grade=HealthGrade.B,
+                vulnerabilities=[open_vuln, fixed_vuln],
+            ),
+        )
+        result = report.to_dict()
+        assert "open_vulnerabilities_count" in result["health"], (
+            "to_dict() must include 'open_vulnerabilities_count' in health block"
+        )
+        assert result["health"]["open_vulnerabilities_count"] == 1
