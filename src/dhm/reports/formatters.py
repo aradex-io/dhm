@@ -358,3 +358,97 @@ class TableFormatter(Formatter):
     @property
     def file_extension(self) -> str:
         return ".txt"
+
+
+class CycloneDXFormatter(Formatter):
+    """Emit a CycloneDX 1.5 SBOM (JSON) with DHM health annotations.
+
+    Produces a standards-compliant Software Bill of Materials so DHM output can
+    feed compliance / supply-chain tooling. Each dependency becomes a component
+    (with a PyPI purl and DHM health properties); OPEN vulnerabilities are
+    emitted as CycloneDX ``vulnerabilities`` entries referencing their component.
+    """
+
+    # CycloneDX severity vocabulary: critical|high|medium|low|info|none|unknown
+    _SEVERITY_MAP = {
+        "critical": "critical",
+        "high": "high",
+        "medium": "medium",
+        "low": "low",
+        "info": "info",
+    }
+
+    @property
+    def file_extension(self) -> str:
+        return "cdx.json"
+
+    def _purl(self, name: str, version: str | None) -> str:
+        norm = name.lower().replace("_", "-")
+        return f"pkg:pypi/{norm}@{version}" if version else f"pkg:pypi/{norm}"
+
+    def format(self, reports: list[DependencyReport]) -> str:
+        from datetime import datetime, timezone
+
+        from dhm import __version__
+
+        components = []
+        vulnerabilities = []
+
+        for report in reports:
+            pkg = report.package
+            ref = self._purl(pkg.name, pkg.version)
+            component = {
+                "type": "library",
+                "bom-ref": ref,
+                "name": pkg.name,
+                "purl": ref,
+                "properties": [
+                    {"name": "dhm:health:grade", "value": report.health.grade.value},
+                    {"name": "dhm:health:score", "value": f"{report.health.overall:.0f}"},
+                    {"name": "dhm:direct", "value": "true" if report.is_direct else "false"},
+                    {
+                        "name": "dhm:maintenance_status",
+                        "value": report.health.maintenance_status.value,
+                    },
+                ],
+            }
+            if pkg.version:
+                component["version"] = pkg.version
+            components.append(component)
+
+            for vuln in report.health.open_vulnerabilities:
+                entry: dict = {
+                    "bom-ref": f"{ref}#{vuln.id}",
+                    "id": vuln.id,
+                    "affects": [{"ref": ref}],
+                }
+                sev = self._SEVERITY_MAP.get(vuln.severity.value, "unknown")
+                rating: dict = {"severity": sev}
+                if vuln.cvss_score is not None:
+                    rating["score"] = vuln.cvss_score
+                    rating["method"] = "CVSSv3"
+                entry["ratings"] = [rating]
+                if vuln.title:
+                    entry["description"] = vuln.title
+                vulnerabilities.append(entry)
+
+        bom = {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.5",
+            "version": 1,
+            "metadata": {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "tools": [
+                    {
+                        "vendor": "DHM",
+                        "name": "dependency-health-monitor",
+                        "version": __version__,
+                    }
+                ],
+            },
+            "components": components,
+        }
+        if vulnerabilities:
+            bom["vulnerabilities"] = vulnerabilities
+
+        return json.dumps(bom, indent=2, default=str)

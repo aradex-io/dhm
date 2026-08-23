@@ -197,16 +197,25 @@ class Collector(ABC):
                             await asyncio.sleep(delay)
                             continue  # retry
 
-                    # --- Read body with hard byte cap (M-6) ---
+                    # --- Read the FULL body with a hard byte cap (M-6) ---
+                    # NOTE: StreamReader.read(n) returns *up to* n bytes and may
+                    # return a partial prefix when the body spans multiple TCP
+                    # chunks, which truncated JSON and caused intermittent
+                    # JSONDecodeErrors. Iterate to EOF, enforcing the cap while
+                    # streaming so memory stays bounded.
                     max_bytes = self.MAX_RESPONSE_SIZE
-                    raw = await response.content.read(max_bytes + 1)
-                    if len(raw) > max_bytes:
-                        raise ValidationError(
-                            "response_size",
-                            f"{len(raw)} bytes",
-                            f"Response body exceeded {max_bytes} bytes",
-                        )
-                    data = json.loads(raw)
+                    total = 0
+                    chunks: list[bytes] = []
+                    async for chunk in response.content.iter_chunked(65536):
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise ValidationError(
+                                "response_size",
+                                f"{total} bytes",
+                                f"Response body exceeded {max_bytes} bytes",
+                            )
+                        chunks.append(chunk)
+                    data = json.loads(b"".join(chunks))
                     return status, data
 
             except _transient_exc as exc:

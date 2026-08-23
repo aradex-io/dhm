@@ -93,6 +93,9 @@ class PackageIdentifier:
     name: str
     version: str | None = None
     extras: tuple[str, ...] = ()
+    # Whether this package is a direct (declared) dependency vs a transitive one.
+    # Not part of identity (see __hash__/__eq__ below).
+    is_direct: bool = True
 
     def __str__(self) -> str:
         result = self.name

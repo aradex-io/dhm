@@ -5,6 +5,7 @@ This module implements parsers for requirements.txt, pyproject.toml,
 and other common Python dependency file formats.
 """
 
+import json
 import re
 import sys
 from abc import ABC, abstractmethod
@@ -137,6 +138,11 @@ class RequirementsTxtSource(DependencySource):
 
         for line_num, line in enumerate(content.splitlines(), 1):
             line = line.strip()
+
+            # Strip a trailing line-continuation backslash (hashed requirements:
+            # "pkg==1.0 \" followed by indented "--hash=..." lines).
+            if line.endswith("\\"):
+                line = line[:-1].strip()
 
             # Skip empty lines and comments
             if not line or line.startswith("#"):
@@ -347,15 +353,111 @@ class PyProjectTomlSource(DependencySource):
         return PackageIdentifier(name=name, version=version, extras=extras)
 
 
+class PoetryLockSource(DependencySource):
+    """Parse poetry.lock files (full pinned resolution, incl. transitive)."""
+
+    def can_parse(self, path: Path) -> bool:
+        return path.name == "poetry.lock"
+
+    def parse(self, path: Path) -> list[PackageIdentifier]:
+        try:
+            data = tomllib.loads(path.read_bytes().decode("utf-8"))
+        except OSError as e:
+            raise ParsingError(str(path), f"Failed to read file: {e}")
+        except tomllib.TOMLDecodeError as e:
+            raise ParsingError(str(path), f"Invalid TOML: {e}")
+
+        packages = []
+        for entry in data.get("package", []):
+            name = entry.get("name")
+            if not name:
+                continue
+            packages.append(PackageIdentifier(name=name, version=entry.get("version")))
+        return packages
+
+
+class UvLockSource(DependencySource):
+    """Parse uv.lock files (full pinned resolution, incl. transitive)."""
+
+    def can_parse(self, path: Path) -> bool:
+        return path.name == "uv.lock"
+
+    def parse(self, path: Path) -> list[PackageIdentifier]:
+        try:
+            data = tomllib.loads(path.read_bytes().decode("utf-8"))
+        except OSError as e:
+            raise ParsingError(str(path), f"Failed to read file: {e}")
+        except tomllib.TOMLDecodeError as e:
+            raise ParsingError(str(path), f"Invalid TOML: {e}")
+
+        packages = []
+        for entry in data.get("package", []):
+            name = entry.get("name")
+            if not name:
+                continue
+            packages.append(PackageIdentifier(name=name, version=entry.get("version")))
+        return packages
+
+
+class PipfileLockSource(DependencySource):
+    """Parse Pipfile.lock files (full pinned resolution, incl. transitive)."""
+
+    def can_parse(self, path: Path) -> bool:
+        return path.name == "Pipfile.lock"
+
+    def parse(self, path: Path) -> list[PackageIdentifier]:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except OSError as e:
+            raise ParsingError(str(path), f"Failed to read file: {e}")
+        except json.JSONDecodeError as e:
+            raise ParsingError(str(path), f"Invalid JSON: {e}")
+
+        packages = []
+        for section in ("default", "develop"):
+            for name, info in (data.get(section) or {}).items():
+                if not name:
+                    continue
+                version = None
+                if isinstance(info, dict):
+                    raw = info.get("version")
+                    if isinstance(raw, str):
+                        version = raw.lstrip("=") or None
+                packages.append(PackageIdentifier(name=name, version=version))
+        return packages
+
+
+# Lockfile source classes, in priority order (most-authoritative first).
+LOCKFILE_SOURCES: tuple[type[DependencySource], ...] = (
+    PoetryLockSource,
+    UvLockSource,
+    PipfileLockSource,
+)
+
+
 class DependencyResolver:
     """Orchestrates dependency resolution from various sources."""
 
+    # Manifest sources declare *direct* dependencies; lockfile sources contain
+    # the full pinned resolution (direct + transitive).
+    MANIFEST_FILENAMES = (
+        "pyproject.toml",
+        "requirements.txt",
+        "requirements-dev.txt",
+        "requirements-test.txt",
+        "requirements-prod.txt",
+    )
+    LOCKFILE_FILENAMES = ("poetry.lock", "uv.lock", "Pipfile.lock")
+
     def __init__(self):
         """Initialize the resolver with default source parsers."""
-        self.sources: list[DependencySource] = [
+        self.manifest_sources: list[DependencySource] = [
             PyProjectTomlSource(),
             RequirementsTxtSource(),
         ]
+        self.lockfile_sources: list[DependencySource] = [cls() for cls in LOCKFILE_SOURCES]
+        # Unified list used by resolve_file / can_parse lookups.
+        self.sources: list[DependencySource] = self.manifest_sources + self.lockfile_sources
 
     def add_source(self, source: DependencySource) -> None:
         """Add a custom dependency source parser.
@@ -363,38 +465,131 @@ class DependencyResolver:
         Args:
             source: A DependencySource implementation.
         """
-        self.sources.insert(0, source)  # Custom sources take priority
+        self.manifest_sources.insert(0, source)  # Custom sources take priority
+        self.sources.insert(0, source)
 
-    def resolve(self, project_path: Path) -> list[PackageIdentifier]:
-        """Find and parse all dependency files in a project.
+    def resolve(
+        self,
+        project_path: Path,
+        include_transitive: bool = False,
+    ) -> list[PackageIdentifier]:
+        """Find and parse dependencies for a project.
 
         Args:
-            project_path: Path to project root or a specific dependency file.
+            project_path: Path to a project root or a specific dependency file.
+            include_transitive: If True, include transitive dependencies. When a
+                lockfile is present its full pinned set is used; otherwise the
+                installed-environment requirement graph is walked from the direct
+                dependencies.
 
         Returns:
-            Deduplicated list of PackageIdentifier objects.
+            Deduplicated list of PackageIdentifier objects with ``is_direct`` set.
         """
-        dependencies = []
-
         if project_path.is_file():
-            # Single file provided
-            for source in self.sources:
-                if source.can_parse(project_path):
-                    dependencies.extend(source.parse(project_path))
-                    break
-        else:
-            # Directory provided - search for dependency files
-            for file in self._find_dependency_files(project_path):
-                for source in self.sources:
-                    if source.can_parse(file):
-                        try:
-                            dependencies.extend(source.parse(file))
-                        except ParsingError:
-                            # Continue with other files if one fails
-                            pass
-                        break
+            return self._resolve_single_file(project_path, include_transitive)
 
-        return self._deduplicate(dependencies)
+        direct_pkgs: list[PackageIdentifier] = []
+        for file in self._find_manifest_files(project_path):
+            for source in self.manifest_sources:
+                if source.can_parse(file):
+                    try:
+                        direct_pkgs.extend(source.parse(file))
+                    except ParsingError:
+                        pass
+                    break
+
+        locked_pkgs: list[PackageIdentifier] = []
+        for file in self._find_lockfiles(project_path):
+            for source in self.lockfile_sources:
+                if source.can_parse(file):
+                    try:
+                        locked_pkgs.extend(source.parse(file))
+                    except ParsingError:
+                        pass
+                    break
+
+        return self._combine(direct_pkgs, locked_pkgs, include_transitive)
+
+    def _resolve_single_file(
+        self, path: Path, include_transitive: bool
+    ) -> list[PackageIdentifier]:
+        """Resolve when a specific file (manifest or lockfile) is provided."""
+        is_lockfile = any(s.can_parse(path) for s in self.lockfile_sources)
+        pkgs: list[PackageIdentifier] = []
+        for source in self.sources:
+            if source.can_parse(path):
+                pkgs = source.parse(path)
+                break
+
+        if is_lockfile:
+            # A lockfile alone has no manifest to distinguish direct vs
+            # transitive; report the full set (all marked direct=unknown->True).
+            return self._deduplicate(pkgs)
+
+        # A manifest file: entries are direct. Optionally expand via installed env.
+        for p in pkgs:
+            p.is_direct = True
+        if include_transitive:
+            pkgs = self._expand_transitive_from_env(pkgs)
+        return self._deduplicate(pkgs)
+
+    def resolve_installed(self) -> list[PackageIdentifier]:
+        """Return every distribution installed in the current environment.
+
+        Versions are the actually-installed versions (not latest-on-PyPI).
+        """
+        from dhm.core.environment import installed_versions
+
+        return [
+            PackageIdentifier(name=name, version=version, is_direct=True)
+            for name, version in sorted(installed_versions().items())
+        ]
+
+    def _combine(
+        self,
+        direct_pkgs: list[PackageIdentifier],
+        locked_pkgs: list[PackageIdentifier],
+        include_transitive: bool,
+    ) -> list[PackageIdentifier]:
+        """Combine manifest (direct) and lockfile (full) results."""
+        direct_names = {p.normalized_name for p in direct_pkgs}
+
+        if locked_pkgs:
+            # Lockfile is authoritative for versions and the full graph.
+            for p in locked_pkgs:
+                p.is_direct = (p.normalized_name in direct_names) if direct_names else True
+            if include_transitive or not direct_names:
+                return self._deduplicate(locked_pkgs)
+            return self._deduplicate([p for p in locked_pkgs if p.is_direct])
+
+        # No lockfile: manifests give the direct set.
+        for p in direct_pkgs:
+            p.is_direct = True
+        if include_transitive:
+            direct_pkgs = self._expand_transitive_from_env(direct_pkgs)
+        return self._deduplicate(direct_pkgs)
+
+    def _expand_transitive_from_env(
+        self, direct_pkgs: list[PackageIdentifier]
+    ) -> list[PackageIdentifier]:
+        """Add transitive deps of *direct_pkgs* using the installed-env graph."""
+        from dhm.core.environment import (
+            installed_requires_graph,
+            installed_versions,
+            transitive_closure,
+        )
+
+        direct_names = {p.normalized_name for p in direct_pkgs}
+        graph = installed_requires_graph()
+        versions = installed_versions()
+        transitive = transitive_closure(direct_names, graph) - direct_names
+
+        result = list(direct_pkgs)
+        for name in sorted(transitive):
+            result.append(
+                PackageIdentifier(name=name, version=versions.get(name), is_direct=False)
+            )
+        return result
 
     def resolve_file(self, file_path: Path) -> list[PackageIdentifier]:
         """Parse a specific dependency file.
@@ -417,38 +612,30 @@ class DependencyResolver:
             "No suitable parser found for this file type.",
         )
 
-    def _find_dependency_files(self, project_path: Path) -> list[Path]:
-        """Find all dependency files in a project directory.
-
-        Args:
-            project_path: Path to project root.
-
-        Returns:
-            List of paths to dependency files.
-        """
-        dependency_files = []
-
-        # Priority order for dependency files
-        priority_files = [
-            "pyproject.toml",
-            "requirements.txt",
-            "requirements-dev.txt",
-            "requirements-test.txt",
-            "requirements-prod.txt",
-        ]
-
-        # Check priority files first
-        for filename in priority_files:
+    def _find_manifest_files(self, project_path: Path) -> list[Path]:
+        """Find manifest files (declaring direct dependencies) in a directory."""
+        found: list[Path] = []
+        for filename in self.MANIFEST_FILENAMES:
             file_path = project_path / filename
             if file_path.exists():
-                dependency_files.append(file_path)
+                found.append(file_path)
+        for path in sorted(project_path.glob("requirements*.txt")):
+            if path not in found:
+                found.append(path)
+        return found
 
-        # Look for other requirements files
-        for path in project_path.glob("requirements*.txt"):
-            if path not in dependency_files:
-                dependency_files.append(path)
+    def _find_lockfiles(self, project_path: Path) -> list[Path]:
+        """Find lockfiles (full pinned resolution) in a directory."""
+        found: list[Path] = []
+        for filename in self.LOCKFILE_FILENAMES:
+            file_path = project_path / filename
+            if file_path.exists():
+                found.append(file_path)
+        return found
 
-        return dependency_files
+    def _find_dependency_files(self, project_path: Path) -> list[Path]:
+        """Find all dependency files (manifests + lockfiles) in a directory."""
+        return self._find_manifest_files(project_path) + self._find_lockfiles(project_path)
 
     def _deduplicate(
         self,
@@ -471,16 +658,20 @@ class DependencyResolver:
                 seen[key] = pkg
             else:
                 existing = seen[key]
+                # A package seen as both direct and transitive is direct.
+                is_direct = existing.is_direct or pkg.is_direct
                 # Prefer the one with a version specified
                 if pkg.version and not existing.version:
                     seen[key] = pkg
+                seen[key].is_direct = is_direct
                 # Merge extras
                 if pkg.extras or existing.extras:
                     merged_extras = tuple(set(existing.extras) | set(pkg.extras))
                     seen[key] = PackageIdentifier(
-                        name=existing.name,
-                        version=existing.version or pkg.version,
+                        name=seen[key].name,
+                        version=seen[key].version or pkg.version,
                         extras=merged_extras,
+                        is_direct=is_direct,
                     )
 
         return list(seen.values())

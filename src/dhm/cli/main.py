@@ -71,9 +71,9 @@ def cli(ctx: click.Context, github_token: str | None, debug: bool) -> None:
 @click.argument("path", type=click.Path(exists=True), default=".")
 @click.option(
     "--format", "-f",
-    type=click.Choice(["table", "json", "markdown"]),
+    type=click.Choice(["table", "json", "markdown", "cyclonedx"]),
     default="table",
-    help="Output format.",
+    help="Output format (cyclonedx = CycloneDX SBOM).",
 )
 @click.option(
     "--output", "-o",
@@ -84,6 +84,17 @@ def cli(ctx: click.Context, github_token: str | None, debug: bool) -> None:
     "--fail-on",
     type=click.Choice(["critical", "high", "medium", "low"]),
     help="Exit non-zero if issues at this severity or above.",
+)
+@click.option(
+    "--include-transitive",
+    is_flag=True,
+    help="Include transitive dependencies (lockfile set or installed-env graph).",
+)
+@click.option(
+    "--installed",
+    "scan_installed",
+    is_flag=True,
+    help="Scan packages installed in the current environment (ignores PATH).",
 )
 @click.option(
     "--no-cache",
@@ -97,6 +108,8 @@ def scan(
     format: str,
     output: str | None,
     fail_on: str | None,
+    include_transitive: bool,
+    scan_installed: bool,
     no_cache: bool,
 ) -> None:
     """Scan project dependencies for health issues.
@@ -135,18 +148,32 @@ def scan(
             TimeElapsedColumn(),
             console=err_console,
         ) as progress:
-            task = progress.add_task("Scanning dependencies...", total=None)
-            reports, formatted = run_async(
-                generator.generate(
-                    project_path,
-                    output_format=format,
-                    output_path=Path(output) if output else None,
+            if scan_installed:
+                task = progress.add_task("Scanning installed packages...", total=None)
+                reports, formatted = run_async(
+                    generator.generate_installed(
+                        output_format=format,
+                        output_path=Path(output) if output else None,
+                    )
                 )
-            )
+            else:
+                task = progress.add_task("Scanning dependencies...", total=None)
+                reports, formatted = run_async(
+                    generator.generate(
+                        project_path,
+                        output_format=format,
+                        output_path=Path(output) if output else None,
+                        include_transitive=include_transitive,
+                    )
+                )
             progress.update(task, description="Scan complete.")
 
         if not reports:
-            print_info("No dependencies found in project.")
+            print_info(
+                "No installed packages found."
+                if scan_installed
+                else "No dependencies found in project."
+            )
             return
 
         # Output results

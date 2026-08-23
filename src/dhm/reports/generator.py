@@ -24,6 +24,7 @@ from dhm.core.models import (
 )
 from dhm.core.resolver import DependencyResolver
 from dhm.reports.formatters import (
+    CycloneDXFormatter,
     Formatter,
     JSONFormatter,
     MarkdownFormatter,
@@ -74,6 +75,7 @@ class ReportGenerator:
             "json": JSONFormatter(),
             "markdown": MarkdownFormatter(),
             "table": TableFormatter(),
+            "cyclonedx": CycloneDXFormatter(),
         }
 
     async def generate(
@@ -81,6 +83,7 @@ class ReportGenerator:
         project_path: Path,
         output_format: str = "table",
         output_path: Path | None = None,
+        include_transitive: bool = False,
     ) -> tuple[list[DependencyReport], str]:
         """Generate a health report for a project.
 
@@ -88,12 +91,14 @@ class ReportGenerator:
             project_path: Path to project root or dependency file.
             output_format: Output format ('json', 'markdown', 'table').
             output_path: Optional path to write output file.
+            include_transitive: Include transitive dependencies (lockfile set or
+                installed-environment graph).
 
         Returns:
             Tuple of (list of DependencyReport, formatted output string).
         """
         # Resolve dependencies
-        packages = self.resolver.resolve(project_path)
+        packages = self.resolver.resolve(project_path, include_transitive=include_transitive)
 
         if not packages:
             return [], "No dependencies found."
@@ -105,6 +110,28 @@ class ReportGenerator:
         formatted = self.format_reports(reports, output_format)
 
         # Write to file if requested
+        if output_path:
+            output_path.write_text(formatted)
+
+        return reports, formatted
+
+    async def generate_installed(
+        self,
+        output_format: str = "table",
+        output_path: Path | None = None,
+    ) -> tuple[list[DependencyReport], str]:
+        """Generate a health report for every installed distribution.
+
+        Uses the actually-installed versions from the current environment rather
+        than the latest release on PyPI.
+        """
+        packages = self.resolver.resolve_installed()
+        if not packages:
+            return [], "No installed packages found."
+
+        reports = await self.generate_reports(packages)
+        formatted = self.format_reports(reports, output_format)
+
         if output_path:
             output_path.write_text(formatted)
 
@@ -219,6 +246,7 @@ class ReportGenerator:
                         name=package.name,
                         version=pypi_metadata.version,
                         extras=package.extras,
+                        is_direct=package.is_direct,
                     )
         except PackageNotFoundError:
             # Re-raise so gather captures it and the caller can report it properly
@@ -291,7 +319,7 @@ class ReportGenerator:
             pypi=pypi_metadata,
             repository=repo_metadata,
             update_available=update_available,
-            is_direct=True,
+            is_direct=package.is_direct,
         )
 
         # Cache the result

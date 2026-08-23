@@ -12,6 +12,10 @@ Comprehensive health assessments for Python project dependencies.
 - **Vulnerability Detection**: Real-time scanning via OSV database with open vs fixed classification
 - **Maintenance Analysis**: Identifies abandoned, deprecated, or archived packages
 - **License Evaluation**: Categorizes licenses (permissive, copyleft, weak copyleft)
+- **Manifests & Lockfiles**: Reads `pyproject.toml`, `requirements*.txt`, `poetry.lock`, `uv.lock`, `Pipfile.lock`
+- **Installed-Env Scanning**: `--installed` reports on the versions actually installed, not latest-on-PyPI
+- **Transitive Analysis**: `--include-transitive` covers the full dependency graph (direct vs transitive tagged)
+- **SBOM Export**: Emit a CycloneDX 1.5 SBOM with health annotations (`-f cyclonedx`)
 - **Caching**: SQLite-based caching reduces API calls and improves performance
 - **CI/CD Ready**: Exit codes for pipeline integration
 
@@ -48,6 +52,15 @@ dhm scan -f json -o report.json
 
 # Fail CI if high+ severity issues found
 dhm scan --fail-on high
+
+# Include transitive dependencies (uses a lockfile if present, else the installed env)
+dhm scan --include-transitive
+
+# Scan what's actually installed in the current environment
+dhm scan --installed
+
+# Emit a CycloneDX SBOM (with health annotations) for supply-chain tooling
+dhm scan --include-transitive -f cyclonedx -o sbom.cdx.json
 ```
 
 ### Python Library

@@ -71,14 +71,18 @@ async def scan(
     *,
     github_token: str | None = None,
     use_cache: bool = True,
+    include_transitive: bool = False,
 ) -> list[DependencyReport]:
     """Scan a project's dependencies for health issues.
 
     Args:
         path: Path to project directory. Defaults to current directory.
-            Supports pyproject.toml (PEP 621 and Poetry) and requirements*.txt.
+            Supports pyproject.toml (PEP 621 and Poetry), requirements*.txt, and
+            lockfiles (poetry.lock, uv.lock, Pipfile.lock).
         github_token: Optional GitHub API token for higher rate limits.
         use_cache: Whether to use cached data (default: True).
+        include_transitive: Include transitive dependencies (lockfile set or
+            installed-environment graph).
 
     Returns:
         List of DependencyReport objects, one per dependency found.
@@ -96,7 +100,35 @@ async def scan(
     )
 
     project_path = Path(path) if path else Path.cwd()
-    reports, _ = await generator.generate(project_path)
+    reports, _ = await generator.generate(
+        project_path, include_transitive=include_transitive
+    )
+    return reports
+
+
+async def scan_installed(
+    *,
+    github_token: str | None = None,
+    use_cache: bool = True,
+) -> list[DependencyReport]:
+    """Scan packages installed in the current Python environment.
+
+    Reports on the actually-installed versions (via ``importlib.metadata``)
+    rather than the latest release on PyPI.
+
+    Returns:
+        List of DependencyReport objects, one per installed distribution.
+
+    Example:
+        >>> import asyncio
+        >>> from dhm import scan_installed
+        >>> reports = asyncio.run(scan_installed())
+    """
+    generator = ReportGenerator(
+        github_token=github_token,
+        use_cache=use_cache,
+    )
+    reports, _ = await generator.generate_installed()
     return reports
 
 
