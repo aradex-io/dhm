@@ -19,7 +19,7 @@ Quick Start:
     ...     print("Update needed!")
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 # High-level API (recommended for most users)
 from dhm.api import (

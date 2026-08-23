@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.1] - 2026-08-22
+
+Follow-up fixes from an independent code review, for findings still open in 0.3.0.
+
+### Fixed
+- Cache `set()` now raises `CacheError` instead of a masking `AttributeError`
+  (removed reference to the non-existent `json.JSONEncodeError`).
+- Open-vs-fixed vulnerability classification now honors the OSV `introduced`
+  lower bound via affected-range membership, eliminating false-positive "open"
+  findings for versions below the affected range.
+- CVSS severity and score are now computed from the OSV CVSS v3 **vector**
+  string (dependency-free CVSS v3.1 base-score calculation) instead of only a
+  severity-text approximation; `_parse_severity` no longer `float()`s the vector.
+- License scoring uses whole-token SPDX matching instead of substring
+  containment, so verbose license text (e.g. containing "DISCLAIMER") no longer
+  false-matches "ISC".
+- Pinned-version extraction uses `packaging` and preserves pre-release/dev
+  suffixes (e.g. `1.0.0rc1`) instead of truncating them with a `[\d.]` regex.
+- `scan` docstring no longer claims unsupported `setup.py` parsing.
+
+### Notes
+- B2 (`--fail-on` open-only), B5 (`asyncio.run`), response-body size cap, and
+  logging/concurrency were already addressed in 0.3.0 and are unchanged.
+
+---
+
 ## [0.3.0] - 2026-05-11
 
 ### Added
