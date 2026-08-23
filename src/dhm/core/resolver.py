@@ -10,6 +10,8 @@ import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
+
 from dhm.core.exceptions import ParsingError, ValidationError
 from dhm.core.models import PackageIdentifier
 from dhm.core.validation import (
@@ -23,6 +25,26 @@ if sys.version_info >= (3, 11):
     import tomllib
 else:
     import tomli as tomllib
+
+
+def _extract_pinned_version(specifier: str) -> str | None:
+    """Return the exact pinned version from a PEP 440 specifier, or None.
+
+    Uses ``packaging`` so pre-releases (``1.0.0rc1``), post/dev releases, and
+    epochs are preserved intact instead of being truncated by a ``[\\d.]`` regex.
+    Only ``==``/``===`` pins yield a concrete version; ranges return None.
+    """
+    if not specifier:
+        return None
+    try:
+        spec_set = SpecifierSet(specifier)
+    except InvalidSpecifier:
+        return None
+    for spec in spec_set:
+        if spec.operator in ("==", "==="):
+            # Strip a trailing ".*" wildcard pin (e.g. "==1.2.*").
+            return spec.version.rstrip(".*") or None
+    return None
 
 
 class DependencySource(ABC):
@@ -189,12 +211,7 @@ class RequirementsTxtSource(DependencySource):
         if extras_str:
             extras = tuple(e.strip() for e in extras_str.split(","))
 
-        version = None
-        if specifier:
-            # Extract exact version if specified with ==
-            exact_match = re.search(r"==\s*([\d.]+)", specifier)
-            if exact_match:
-                version = exact_match.group(1)
+        version = _extract_pinned_version(specifier) if specifier else None
 
         return PackageIdentifier(name=name, version=version, extras=extras)
 
@@ -295,12 +312,7 @@ class PyProjectTomlSource(DependencySource):
         if extras_str:
             extras = tuple(e.strip() for e in extras_str.split(","))
 
-        version = None
-        if specifier:
-            # Extract exact version if specified with ==
-            exact_match = re.search(r"==\s*([\d.]+)", specifier)
-            if exact_match:
-                version = exact_match.group(1)
+        version = _extract_pinned_version(specifier) if specifier else None
 
         return PackageIdentifier(name=name, version=version, extras=extras)
 

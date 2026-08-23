@@ -175,7 +175,11 @@ class CacheLayer:
                     (key, value_json, etag, str(ttl_seconds)),
                 )
 
-        except (sqlite3.Error, json.JSONEncodeError) as e:
+        except (sqlite3.Error, TypeError, ValueError) as e:
+            # json.dumps raises TypeError for non-serializable values and
+            # ValueError for circular references; sqlite3.Error for DB failures.
+            # (json has no JSONEncodeError attribute — referencing it would mask
+            # the real error with an AttributeError.)
             raise CacheError("set", str(e))
 
     def delete(self, key: str) -> bool:

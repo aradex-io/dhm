@@ -449,23 +449,26 @@ class HealthCalculator:
             # No license information - risky for commercial use
             return 30.0
 
-        # Normalize license ID
-        license_id = license_id.upper().replace(" ", "-").replace("_", "-")
+        # Tokenize on whitespace/punctuation (keeping hyphens/dots/plus so SPDX
+        # ids like "Apache-2.0" stay intact) and match whole tokens against the
+        # SPDX id sets. Whole-token matching avoids false positives from
+        # substring containment (e.g. "ISC" inside "DISCLAIMER" in a verbose
+        # license blob).
+        import re
 
-        # Check for permissive licenses
-        for lic in self.LICENSE_PERMISSIVE:
-            if lic.upper() in license_id:
-                return 100.0
+        tokens = {t.upper() for t in re.split(r"[\s,;:/()\[\]]+", license_id) if t}
 
-        # Check for weak copyleft
-        for lic in self.LICENSE_WEAK_COPYLEFT:
-            if lic.upper() in license_id:
-                return 75.0
+        permissive = {lic.upper() for lic in self.LICENSE_PERMISSIVE} | {"BSD"}
+        weak_copyleft = {lic.upper() for lic in self.LICENSE_WEAK_COPYLEFT}
+        copyleft = {lic.upper() for lic in self.LICENSE_COPYLEFT}
 
-        # Check for strong copyleft
-        for lic in self.LICENSE_COPYLEFT:
-            if lic.upper() in license_id:
-                return 60.0
+        if tokens & permissive:
+            return 100.0
+        # Weak copyleft checked before strong so LGPL/MPL do not fall through to GPL.
+        if tokens & weak_copyleft:
+            return 75.0
+        if tokens & copyleft:
+            return 60.0
 
         # Unknown license - moderate uncertainty
         return 50.0

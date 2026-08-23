@@ -76,7 +76,7 @@ async def scan(
 
     Args:
         path: Path to project directory. Defaults to current directory.
-            Supports pyproject.toml, requirements.txt, setup.py, etc.
+            Supports pyproject.toml (PEP 621 and Poetry) and requirements*.txt.
         github_token: Optional GitHub API token for higher rate limits.
         use_cache: Whether to use cached data (default: True).
 
