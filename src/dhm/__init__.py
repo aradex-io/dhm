@@ -19,7 +19,7 @@ Quick Start:
     ...     print("Update needed!")
 """
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 
 # High-level API (recommended for most users)
 from dhm.api import (
@@ -27,6 +27,7 @@ from dhm.api import (
     check_packages,
     check_sync,
     scan,
+    scan_installed,
     scan_sync,
 )
 
@@ -70,6 +71,7 @@ __all__ = [
     "check_packages",
     "scan",
     "scan_sync",
+    "scan_installed",
     # Models
     "AlternativePackage",
     "ConfidenceLevel",

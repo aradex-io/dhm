@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.0] - 2026-08-23
+
+### Added
+- **Installed-environment scanning** (`dhm scan --installed`, `dhm.scan_installed()`):
+  report on the packages actually installed in the current environment (real
+  installed versions via `importlib.metadata`), not the latest PyPI release.
+- **Lockfile support**: `poetry.lock`, `uv.lock`, and `Pipfile.lock` are now
+  parsed (full pinned resolution, including transitive packages with real
+  versions).
+- **Transitive dependencies** (`--include-transitive`, `scan(..., include_transitive=True)`):
+  delivers the previously-inert `include_transitive` behavior. When a lockfile is
+  present its full set is used; otherwise the installed-environment requirement
+  graph is walked from the direct dependencies. Each report is tagged `is_direct`.
+- **CycloneDX SBOM output** (`dhm scan -f cyclonedx`): emit a CycloneDX 1.5 SBOM
+  with per-component DHM health properties and OPEN vulnerabilities as CycloneDX
+  `vulnerabilities` entries. No new runtime dependency.
+- Hashed `requirements.txt` (pip `--hash` with `\` line continuations) now parse
+  correctly.
+
+### Fixed
+- **Response bodies are now fully read** in `Collector._get_json`: the previous
+  `StreamReader.read(n)` could return a partial prefix when the body spanned
+  multiple TCP chunks, causing intermittent `JSONDecodeError` (truncated JSON) on
+  some packages. The body is now reassembled across chunks with the size cap
+  still enforced while streaming.
+
+---
+
 ## [0.3.1] - 2026-08-22
 
 Follow-up fixes from an independent code review, for findings still open in 0.3.0.

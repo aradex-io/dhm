@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dependency-health-monitor"
-version = "0.3.1"
+version = "0.4.0"
 description = "Comprehensive health assessments for Python project dependencies"
 readme = "README.md"
 license = "MIT"
