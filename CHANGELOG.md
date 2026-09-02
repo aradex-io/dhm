@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.4.1] - 2026-09-02
+
 ### Fixed
 - `dhm scan <path>` reported "No dependencies found in project" for any repo
   whose manifest (`requirements.txt`, `pyproject.toml`, lockfiles, etc.) was
