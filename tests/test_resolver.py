@@ -293,3 +293,44 @@ class TestDependencyResolver:
         assert "requirements.txt" in filenames
         assert "requirements-dev.txt" in filenames
         assert "pyproject.toml" in filenames
+
+    def test_find_manifest_files_nested_subdirectory(self, resolver, tmp_path):
+        """Manifests one or more levels below project_path are still found.
+
+        Regression test: many real-world repos keep requirements.txt in a
+        subdirectory (e.g. python/requirements.txt) rather than at the repo
+        root, and resolve() previously returned an empty result for them.
+        """
+        nested_dir = tmp_path / "python"
+        nested_dir.mkdir()
+        (nested_dir / "requirements.txt").write_text("requests>=2.28.0\n")
+
+        files = resolver._find_manifest_files(tmp_path)
+
+        assert (nested_dir / "requirements.txt") in files
+
+        packages = resolver.resolve(tmp_path)
+        assert any(p.name == "requests" for p in packages)
+
+    def test_find_manifest_files_skips_vendor_dirs(self, resolver, tmp_path):
+        """Vendored/virtualenv/VCS directories are not searched."""
+        for ignored in (".git", "node_modules", ".venv", "site-packages"):
+            d = tmp_path / ignored
+            d.mkdir()
+            (d / "requirements.txt").write_text("should-not-be-found\n")
+
+        files = resolver._find_manifest_files(tmp_path)
+
+        assert files == []
+
+    def test_find_manifest_files_respects_max_depth(self, resolver, tmp_path):
+        """Manifests beyond MAX_SCAN_DEPTH levels deep are not found."""
+        deep_dir = tmp_path
+        for i in range(resolver.MAX_SCAN_DEPTH + 2):
+            deep_dir = deep_dir / f"level{i}"
+        deep_dir.mkdir(parents=True)
+        (deep_dir / "requirements.txt").write_text("too-deep\n")
+
+        files = resolver._find_manifest_files(tmp_path)
+
+        assert files == []
