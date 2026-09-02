@@ -6,6 +6,7 @@ and other common Python dependency file formats.
 """
 
 import json
+import os
 import re
 import sys
 from abc import ABC, abstractmethod
@@ -449,6 +450,34 @@ class DependencyResolver:
     )
     LOCKFILE_FILENAMES = ("poetry.lock", "uv.lock", "Pipfile.lock")
 
+    # Directories that never contain a project's own manifests, or that would
+    # blow up the search (vendored deps, VCS metadata, caches, virtualenvs).
+    IGNORED_DIR_NAMES = frozenset(
+        {
+            ".git",
+            ".hg",
+            ".svn",
+            "__pycache__",
+            ".mypy_cache",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".tox",
+            ".nox",
+            ".venv",
+            "venv",
+            "env",
+            ".env",
+            "node_modules",
+            "site-packages",
+            "dist",
+            "build",
+            ".eggs",
+            "vendor",
+        }
+    )
+    # How many directory levels below project_path to search for manifests.
+    MAX_SCAN_DEPTH = 4
+
     def __init__(self):
         """Initialize the resolver with default source parsers."""
         self.manifest_sources: list[DependencySource] = [
@@ -612,25 +641,51 @@ class DependencyResolver:
             "No suitable parser found for this file type.",
         )
 
+    def _iter_scan_dirs(self, project_path: Path):
+        """Yield project_path and its subdirectories, pruning noise/vendor dirs.
+
+        Bounded by MAX_SCAN_DEPTH so a scan of a large tree stays fast; skips
+        VCS, cache, virtualenv, and vendored-dependency directories that would
+        otherwise flood results with irrelevant manifests.
+        """
+        yield project_path
+        root_depth = len(project_path.parts)
+        for dirpath, dirnames, _ in os.walk(project_path):
+            depth = len(Path(dirpath).parts) - root_depth
+            if depth >= self.MAX_SCAN_DEPTH:
+                dirnames[:] = []
+                continue
+            dirnames[:] = [
+                d
+                for d in dirnames
+                if d not in self.IGNORED_DIR_NAMES and not d.startswith(".")
+            ]
+            for d in sorted(dirnames):
+                yield Path(dirpath) / d
+
     def _find_manifest_files(self, project_path: Path) -> list[Path]:
-        """Find manifest files (declaring direct dependencies) in a directory."""
+        """Find manifest files (declaring direct dependencies), searching
+        project_path and its subdirectories."""
         found: list[Path] = []
-        for filename in self.MANIFEST_FILENAMES:
-            file_path = project_path / filename
-            if file_path.exists():
-                found.append(file_path)
-        for path in sorted(project_path.glob("requirements*.txt")):
-            if path not in found:
-                found.append(path)
+        for directory in self._iter_scan_dirs(project_path):
+            for filename in self.MANIFEST_FILENAMES:
+                file_path = directory / filename
+                if file_path.exists() and file_path not in found:
+                    found.append(file_path)
+            for path in sorted(directory.glob("requirements*.txt")):
+                if path not in found:
+                    found.append(path)
         return found
 
     def _find_lockfiles(self, project_path: Path) -> list[Path]:
-        """Find lockfiles (full pinned resolution) in a directory."""
+        """Find lockfiles (full pinned resolution), searching project_path
+        and its subdirectories."""
         found: list[Path] = []
-        for filename in self.LOCKFILE_FILENAMES:
-            file_path = project_path / filename
-            if file_path.exists():
-                found.append(file_path)
+        for directory in self._iter_scan_dirs(project_path):
+            for filename in self.LOCKFILE_FILENAMES:
+                file_path = directory / filename
+                if file_path.exists() and file_path not in found:
+                    found.append(file_path)
         return found
 
     def _find_dependency_files(self, project_path: Path) -> list[Path]:

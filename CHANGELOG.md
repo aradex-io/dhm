@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `dhm scan <path>` reported "No dependencies found in project" for any repo
+  whose manifest (`requirements.txt`, `pyproject.toml`, lockfiles, etc.) was
+  not directly at `<path>`'s root. Discovery now searches subdirectories
+  (bounded depth, skipping `.git`, `.venv`, `node_modules`, `site-packages`,
+  and similar vendor/cache directories) so nested manifests are found.
+
 ---
 
 ## [0.4.0] - 2026-08-23
